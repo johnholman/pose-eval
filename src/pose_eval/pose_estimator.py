@@ -42,9 +42,10 @@ class LandmarkPoseEstimator:
         float, float, float], int] | None:
 
         # get most recent landmark observations made in this stationary period
-        if (result := self.stationary_observations(step_num, wheel_positions)) is None:
+        if (observations := self.stationary_observations(step_num, wheel_positions)) is None:
             return None
-        unscaled_landmarks, landmarks = result
+
+        unscaled_landmarks, landmarks = observations
         n_landmarks = len(landmarks)
 
         # no estimate if a geometric estimate could not be made
@@ -55,13 +56,18 @@ class LandmarkPoseEstimator:
         if n_landmarks == 2:
             # if only two landmarks just use the geometric-based pose and set loss to None
             # optimization would leave the pose unchanged with zero loss so not useful here
-            self.pose = geom_pose
-            self.loss = None
+            pose = geom_pose
+            loss = None
             print(f'{step_num}: two-beacon pose estimate {Pose(*geom_pose)}')
+            return None
 
         elif n_landmarks >= 3:
             # estimate using nonlinear least squares optimization with the geometry-derived pose as the starting point
-            self.pose, self.loss = self.optimize_pose(step_num, geom_pose, landmarks, unscaled_landmarks)
+            result = self.optimize_pose(step_num, geom_pose, landmarks, unscaled_landmarks)
+
+        return result
+
+
         # relpos = [lm.relpos for lm in landmarks.values()]
         # abspos = [lm.abspos for lm in landmarks.values()]
         # start = time.perf_counter()
@@ -71,8 +77,6 @@ class LandmarkPoseEstimator:
         # print(
         #     f'{step_num}: three-beacon pose estimate {Pose(*pose)} loss {loss:.4f} iters {iters} opt time {duration_ms:.2f} ms')
 
-        # TODO why do these need to be attributes?
-        return self.pose, self.loss
 
     def make_least_squares_estimate(self, step_num: int, start_pose, landmarks):
         relpos = [lm.relpos for lm in landmarks.values()]
@@ -93,12 +97,12 @@ class LandmarkPoseEstimator:
                                                              landmarks=unscaled_landmarks)
         print(
             f'{step_num}: unscaled estimate {Pose(*pose)} loss {loss:.4f} iters {iters}')
-        results['scaled'] = { 'pose': pose, 'loss': loss, 'iters': iters}
+        results['scaled'] = { 'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
 
         # self.send('test/unscaled', {'pose': pose, 'loss': loss, 'iters': iters})
         pose, loss, iters = self.make_least_squares_estimate(step_num=step_num, start_pose=start_pose,
                                                              landmarks=scaled_landmarks)
-        results['unscaled'] = { 'pose': pose, 'loss': loss, 'iters': iters}
+        results['unscaled'] = { 'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
 
         print(
             f'{step_num}: scaled estimate {Pose(*pose)} loss {loss:.4f} iters {iters}')
