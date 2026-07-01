@@ -2,6 +2,7 @@ import time
 from dataclasses import dataclass
 from itertools import combinations
 from math import pi
+from pprint import pprint
 
 from pose_eval.least_squares import optimize
 from pose_eval.beacon import BeaconRegistry, BeaconData
@@ -86,22 +87,26 @@ class LandmarkPoseEstimator:
         return pose, loss
 
     def make_both_least_squares_estimates(self, step_num: int, start_pose, scaled_landmarks, unscaled_landmarks):
+        results = {}
         # send_msg = get_message_service().send
         pose, loss, iters = self.make_least_squares_estimate(step_num=step_num, start_pose=start_pose,
                                                              landmarks=unscaled_landmarks)
         print(
             f'{step_num}: unscaled estimate {Pose(*pose)} loss {loss:.4f} iters {iters}')
+        results['scaled'] = { 'pose': pose, 'loss': loss, 'iters': iters}
 
         # self.send('test/unscaled', {'pose': pose, 'loss': loss, 'iters': iters})
         pose, loss, iters = self.make_least_squares_estimate(step_num=step_num, start_pose=start_pose,
                                                              landmarks=scaled_landmarks)
+        results['unscaled'] = { 'pose': pose, 'loss': loss, 'iters': iters}
+
         print(
             f'{step_num}: scaled estimate {Pose(*pose)} loss {loss:.4f} iters {iters}')
 
+        print(f'{step_num}:')
+        pprint(results)
 
-        # self.send('test/scaled', {'pose': pose, 'loss': loss, 'iters': iters})
-        # return the scaled version
-        return pose, loss
+        return results
 
 
     def stationary_observations(self, step_num: int, wheel_positions: tuple[float, float]) -> \
