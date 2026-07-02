@@ -38,8 +38,7 @@ class LandmarkPoseEstimator:
         self.loss = None
 
 
-    def estimate_pose(self, step_num: int, wheel_positions: tuple[float, float]) -> tuple[tuple[
-        float, float, float], int] | None:
+    def estimate_pose(self, step_num: int, wheel_positions: tuple[float, float]) :
 
         # get most recent landmark observations made in this stationary period
         if (observations := self.stationary_observations(step_num, wheel_positions)) is None:
@@ -97,12 +96,12 @@ class LandmarkPoseEstimator:
                                                              landmarks=unscaled_landmarks)
         print(
             f'{step_num}: unscaled estimate {Pose(*pose)} loss {loss:.4f} iters {iters}')
-        results['scaled'] = { 'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
+        results['s'] = { 'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
 
         # self.send('test/unscaled', {'pose': pose, 'loss': loss, 'iters': iters})
         pose, loss, iters = self.make_least_squares_estimate(step_num=step_num, start_pose=start_pose,
                                                              landmarks=scaled_landmarks)
-        results['unscaled'] = { 'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
+        results['u'] = { 'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
 
         print(
             f'{step_num}: scaled estimate {Pose(*pose)} loss {loss:.4f} iters {iters}')

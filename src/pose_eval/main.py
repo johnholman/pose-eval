@@ -1,13 +1,14 @@
 from argparse import ArgumentParser
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
 from pose_eval.beacon import BeaconObservation, BeaconRegistry
+from pose_eval.pose_estimator import LandmarkPoseEstimator
 from pose_eval.utils.flatten import flatten
 from pose_eval.utils.persist import set_base, load_data, save_data
-from pose_eval.pose_estimator import LandmarkPoseEstimator
 
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
@@ -16,7 +17,7 @@ pd.set_option('display.max_colwidth', None)
 pd.set_option('display.float_format', '{:.2f}'.format)
 
 
-def process(data_path: str | Path, output_path: str | Path, float_format: str = None):
+def process(data_path: str | Path, output_path: str | Path, float_format: str | None = None):
     """
     """
     base_path = Path(r'~/Google Drive/data/pose-eval').expanduser().resolve()
@@ -29,7 +30,7 @@ def process(data_path: str | Path, output_path: str | Path, float_format: str = 
     collected_df, md = load_data(str(load_path), data_fname='robot')
     print(collected_df.head())
 
-    # remove rows without a beacon estimate
+    # remove any rows without a beacon estimate
     df = collected_df.dropna(subset=['b_data'])
     print(df)
 
@@ -45,7 +46,8 @@ def process(data_path: str | Path, output_path: str | Path, float_format: str = 
         beacon_data = beacon_registry.process_observation(step_num, beacon_obs)
         print(beacon_data)
         result = pose_estimator.estimate_pose(step_num, wheel_positions=(0, 0))
-        if result is not None:
+        # save any resulting pose estimate provided it is based only on valid observations
+        if result is not None and d.valid_obs:
             print(f'{step_num}: result: {result}')
             flattened_result = flatten(result)
             print(f'{step_num}: flattened result: {flattened_result}')
@@ -60,7 +62,7 @@ def process(data_path: str | Path, output_path: str | Path, float_format: str = 
     print(output_df.head())
     save_data(output_df, dirpath=str(save_path), data_fname='poses', format_spec=['csv', 'feather'], float_format=float_format)
 
-def analyse(results_path: str | Path, float_format: str = None):
+def analyse(results_path: str | Path, float_format: str | None  = None):
     base_path = Path(r'~/Google Drive/data/pose-eval').expanduser().resolve()
     set_base(str(base_path))
 
@@ -74,26 +76,50 @@ def analyse(results_path: str | Path, float_format: str = None):
     print(df.head())
 
     true = df.loc[:, ['true_x', 'true_y', 'true_theta']].to_numpy()
-    scaled = df.loc[:, ['scaled_pose_x', 'scaled_pose_y', 'scaled_pose_theta']].to_numpy()
-    unscaled = df.loc[:, ['unscaled_pose_x', 'unscaled_pose_y', 'unscaled_pose_theta']].to_numpy()
+    scaled = df.loc[:, ['s_pose_x', 's_pose_y', 's_pose_theta']].to_numpy()
+    unscaled = df.loc[:, ['u_pose_x', 'u_pose_y', 'u_pose_theta']].to_numpy()
+    # true = df.loc[:, ['true_x', 'true_y', 'true_theta']].to_numpy()
+    # scaled = df.loc[:, ['scaled_pose_x', 'scaled_pose_y', 'scaled_pose_theta']].to_numpy()
+    # unscaled = df.loc[:, ['unscaled_pose_x', 'unscaled_pose_y', 'unscaled_pose_theta']].to_numpy()
 
     print(true)
     print(scaled)
 
-    scaled_se = (true - scaled) ** 2
+    scaled_se = pose_difference(true, scaled) ** 2
     print(f'scaled_se: {scaled_se}')
     scaled_sse = scaled_se.sum(axis=1)  # sum of squared errors for each scaled result
     print(f'scaled_sse: {scaled_sse}')
     df.loc[:, 'scaled_sse'] = scaled_sse
     print(df)
 
-    unscaled_se = (true - unscaled) ** 2
+    unscaled_se = pose_difference(true, unscaled) ** 2
+    # unscaled_se = (true - unscaled) ** 2
     unscaled_sse = unscaled_se.sum(axis=1)  # sum of squared errors for each unscaled result
     print(f'{unscaled_sse=}')
     df.loc[:, 'unscaled_sse'] = unscaled_sse
     print(df)
 
     save_data(df, str(save_path), data_fname='analysis', format_spec=['csv', 'feather'], float_format=float_format)
+
+
+
+def pose_difference(pose_array1, pose_array2, degrees=False):
+    """Calculates the difference between two N x 3 arrays of poses (p2 - p1).
+
+    Each row is expected to be (x, y, theta).
+    Angular difference is correctly wrapped to [-pi, pi]
+    """
+    diff = pose_array2 - pose_array1
+
+    theta_diff = diff[:, 2]
+
+    # Standard radian wrapping using atan2(sin(x), cos(x))
+    wrapped_theta = np.arctan2(np.sin(theta_diff), np.cos(theta_diff))
+
+    # 3. Overwrite the raw angular difference with the wrapped one
+    diff[:, 2] = wrapped_theta
+
+    return diff
 
 def main(data_path, save_path, float_format=None):
     process(data_path=data_path, output_path=save_path, float_format=float_format)
