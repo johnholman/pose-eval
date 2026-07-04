@@ -4,11 +4,11 @@ from itertools import combinations
 from math import pi
 from pprint import pprint
 
+from pose_eval.beacon import BeaconData, BeaconRegistry
 from pose_eval.least_squares import optimize
-from pose_eval.beacon import BeaconRegistry, BeaconData
+from pose_eval.two_beacons_no_opt import estimate_pose as geom_estimate_pose
 from pose_eval.utils.angles import angular_distance, average_angle
 from pose_eval.utils.pose import Pose
-from pose_eval.two_beacons_no_opt import estimate_pose as geom_estimate_pose
 
 
 @dataclass
@@ -17,6 +17,7 @@ class LandmarkPoseData:
     pose: tuple[float, float, float]  # landmark pose estimate
     loss: float | None  # optimization loss
     adopted: bool  # whether the landmark pose estimate was adopted as the current pose
+
 
 class LandmarkPoseEstimator:
     eps = 0.02
@@ -37,8 +38,7 @@ class LandmarkPoseEstimator:
         self.pose_merit = None
         self.loss = None
 
-
-    def estimate_pose(self, step_num: int, wheel_positions: tuple[float, float]) :
+    def estimate_pose(self, step_num: int, wheel_positions: tuple[float, float]):
 
         # get most recent landmark observations made in this stationary period
         if (observations := self.stationary_observations(step_num, wheel_positions)) is None:
@@ -66,7 +66,6 @@ class LandmarkPoseEstimator:
 
         return result
 
-
         # relpos = [lm.relpos for lm in landmarks.values()]
         # abspos = [lm.abspos for lm in landmarks.values()]
         # start = time.perf_counter()
@@ -75,7 +74,6 @@ class LandmarkPoseEstimator:
         # # print(f'{step_num}: optimization time {duration_ms:.2f} ms')
         # print(
         #     f'{step_num}: three-beacon pose estimate {Pose(*pose)} loss {loss:.4f} iters {iters} opt time {duration_ms:.2f} ms')
-
 
     def make_least_squares_estimate(self, step_num: int, start_pose, landmarks):
         relpos = [lm.relpos for lm in landmarks.values()]
@@ -96,12 +94,12 @@ class LandmarkPoseEstimator:
                                                              landmarks=unscaled_landmarks)
         print(
             f'{step_num}: unscaled estimate {Pose(*pose)} loss {loss:.4f} iters {iters}')
-        results['s'] = { 'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
+        results['s'] = {'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
 
         # self.send('test/unscaled', {'pose': pose, 'loss': loss, 'iters': iters})
         pose, loss, iters = self.make_least_squares_estimate(step_num=step_num, start_pose=start_pose,
                                                              landmarks=scaled_landmarks)
-        results['u'] = { 'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
+        results['u'] = {'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
 
         print(
             f'{step_num}: scaled estimate {Pose(*pose)} loss {loss:.4f} iters {iters}')
@@ -110,7 +108,6 @@ class LandmarkPoseEstimator:
         pprint(results)
 
         return results
-
 
     def stationary_observations(self, step_num: int, wheel_positions: tuple[float, float]) -> \
             tuple[dict[int, BeaconData], dict[int, BeaconData]] | None:
@@ -191,7 +188,7 @@ class LandmarkPoseEstimator:
         # if there are no acceptable estimates return None
         naccepted = len(accepted_estimates)
         if naccepted == 0:
-            print(f'no acceptable pose estimates from these landmark observations')
+            print('no acceptable pose estimates from these landmark observations')
             return None
 
         # report the accepted estimates
