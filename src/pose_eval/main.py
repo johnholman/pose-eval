@@ -5,10 +5,11 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
+from pose_eval.analysis import analyse
 from pose_eval.beacon import BeaconObservation, BeaconRegistry
 from pose_eval.pose_estimator import LandmarkPoseEstimator
 from pose_eval.utils.flatten import flatten
-from pose_eval.utils.persist import set_base, load_data, save_data
+from pose_eval.utils.persist import load_data, save_data, set_base
 
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
@@ -32,98 +33,104 @@ def process(data_path: str | Path, output_path: str | Path, float_format: str | 
 
     # remove any rows without a beacon estimate
     df = collected_df.dropna(subset=['b_data'])
-    print(df)
 
-    beacon_registry = BeaconRegistry()
-    pose_estimator = LandmarkPoseEstimator(beacon_registry)
+    # get data common to all algorithms that should appear in the results
+    common_columns = ['step_num', 'actual_x', 'actual_y', 'actual_theta']
+    common_df = df.loc[df['valid_obs'], common_columns]
+    # and set index to the step number
+    common_df = common_df.set_index('step_num')
 
-    output_rows = []  # output as list of row dictionaries
-    for d in df.itertuples():
-        step_num = d.step_num
-        beacon_obs = BeaconObservation(data=d.b_data, start_step=d.b_start, end_step=d.b_end,
-                                       relpos=(d.b_relb, d.b_dist))
-        print(f'{step_num}: {beacon_obs}')
-        beacon_data = beacon_registry.process_observation(step_num, beacon_obs)
-        print(beacon_data)
-        result = pose_estimator.estimate_pose(step_num, wheel_positions=(0, 0))
-        # save any resulting pose estimate provided it is based only on valid observations
-        if result is not None and d.valid_obs:
+    dfs = []  # list of result dfs from each algorithm variant
+
+    prefixes = ('s', 'u')
+    scaled_observations = (True, False)
+    for prefix, scaled_observations in zip(prefixes, scaled_observations):
+        cfg = {'scaled_observations': scaled_observations}
+        estimator = EstimatorRunner(prefix, cfg)
+        output_df = estimator.run(df)
+        dfs.append(output_df)
+        # data_fname = 'sposes' if scaled_observations else 'uposes'
+        # save_data(output_df, dirpath=str(save_path), data_fname=data_fname, format_spec=['csv', 'feather'], float_format=float_format)
+
+    for output_df in dfs:
+        print(output_df.head())
+
+    # combine the results
+    combined_df = pd.concat([common_df] + dfs, axis=1, join='outer')
+
+    combined_df = combined_df.reset_index().sort_values('step_num')
+
+    save_data(combined_df, dirpath=str(save_path), data_fname='results', format_spec=['csv', 'feather'],
+              float_format=float_format)
+
+
+class EstimatorRunner:
+    def __init__(self, prefix: str, cfg: dict):
+        self.prefix = prefix
+        self.beacon_registry = BeaconRegistry()
+        self.pose_estimator = LandmarkPoseEstimator(self.beacon_registry)
+        self.scaled_observations = cfg['scaled_observations']
+
+    def run(self, df: DataFrame) -> DataFrame:
+        print('EstimatorRunner.run() starting with standard algorithm')
+        output_rows = []  # output as list of row dictionaries
+        for d in df.itertuples():
+            step_num = d.step_num
+            beacon_obs = BeaconObservation(data=d.b_data, start_step=d.b_start, end_step=d.b_end,
+                                           relpos=(d.b_relb, d.b_dist))
+            print(f'{step_num}: {beacon_obs}')
+            beacon_data = self.beacon_registry.process_observation(step_num, beacon_obs)
+            print(beacon_data)
+
+            # get most recent landmark observations made in this stationary period
+            observations = self.pose_estimator.stationary_observations(step_num, wheel_positions=(0.0, 0.0))
+            if observations is None:
+                continue
+
+            unscaled_landmarks, scaled_landmarks = observations
+            if len(unscaled_landmarks) < 3:
+                continue
+
+            geom_result = self.pose_estimator.geometric_pose_estimate(step_num, scaled_landmarks)
+            if geom_result is None:
+                continue
+
+            geom_pose, merit = geom_result
+
+            landmarks = scaled_landmarks if self.scaled_observations else unscaled_landmarks
+
+            result = self.pose_estimator.optimize_pose(geom_pose, landmarks)
+
+            # save any resulting pose estimate provided it is based only on valid observations
+            if not d.valid_obs:
+                print(f'{step_num}: *** invalid observation')
+
+            if result is None or not d.valid_obs:
+                print(f'{step_num}: three-landmark pose not made')
+                continue
+
+            # add the algorithm prefix to each column label
+            result = {self.prefix + '_' + key: value for key, value in result.items()}
+
+            # add the step number
+            result |= {'step_num': step_num}
             print(f'{step_num}: result: {result}')
-            flattened_result = flatten(result)
-            print(f'{step_num}: flattened result: {flattened_result}')
-            true_pose = { 'true_x': d.actual_x, 'true_y': d.actual_y, 'true_theta': d.actual_theta }
-            output_row = {'step_num': step_num } | true_pose | flattened_result
-            print(f'{step_num}: output_row: {output_row}')
-            output_rows.append(output_row)
-        else:
-            print(f'{step_num}: three-landmark pose not made')
 
-    output_df = DataFrame(output_rows)
-    print(output_df.head())
-    save_data(output_df, dirpath=str(save_path), data_fname='poses', format_spec=['csv', 'feather'], float_format=float_format)
+            # flattened_result = flatten(result)
+            # print(f'{step_num}: flattened result: {flattened_result}')
+            # true_pose = {'true_x': d.actual_x, 'true_y': d.actual_y, 'true_theta': d.actual_theta}
+            # output_row = {'step_num': step_num} | flattened_result
+            # print(f'{step_num}: output_row: {output_row}')
+            output_rows.append(result)
 
-def analyse(results_path: str | Path, float_format: str | None  = None):
-    base_path = Path(r'~/Google Drive/data/pose-eval').expanduser().resolve()
-    set_base(str(base_path))
+        output_df = DataFrame(output_rows).set_index('step_num')
+        return output_df
 
-    save_path = load_path = Path('expts') / results_path
-    print(f"analysing results from {base_path / load_path}")
-
-    df = load_data(str(load_path), data_fname='poses')
-
-    # remove rows without true pose data as these may be based on stale observations
-    df = df.dropna(subset=['true_x'])
-    print(df.head())
-
-    true = df.loc[:, ['true_x', 'true_y', 'true_theta']].to_numpy()
-    scaled = df.loc[:, ['s_pose_x', 's_pose_y', 's_pose_theta']].to_numpy()
-    unscaled = df.loc[:, ['u_pose_x', 'u_pose_y', 'u_pose_theta']].to_numpy()
-    # true = df.loc[:, ['true_x', 'true_y', 'true_theta']].to_numpy()
-    # scaled = df.loc[:, ['scaled_pose_x', 'scaled_pose_y', 'scaled_pose_theta']].to_numpy()
-    # unscaled = df.loc[:, ['unscaled_pose_x', 'unscaled_pose_y', 'unscaled_pose_theta']].to_numpy()
-
-    print(true)
-    print(scaled)
-
-    scaled_se = pose_difference(true, scaled) ** 2
-    print(f'scaled_se: {scaled_se}')
-    scaled_sse = scaled_se.sum(axis=1)  # sum of squared errors for each scaled result
-    print(f'scaled_sse: {scaled_sse}')
-    df.loc[:, 'scaled_sse'] = scaled_sse
-    print(df)
-
-    unscaled_se = pose_difference(true, unscaled) ** 2
-    # unscaled_se = (true - unscaled) ** 2
-    unscaled_sse = unscaled_se.sum(axis=1)  # sum of squared errors for each unscaled result
-    print(f'{unscaled_sse=}')
-    df.loc[:, 'unscaled_sse'] = unscaled_sse
-    print(df)
-
-    save_data(df, str(save_path), data_fname='analysis', format_spec=['csv', 'feather'], float_format=float_format)
-
-
-
-def pose_difference(pose_array1, pose_array2, degrees=False):
-    """Calculates the difference between two N x 3 arrays of poses (p2 - p1).
-
-    Each row is expected to be (x, y, theta).
-    Angular difference is correctly wrapped to [-pi, pi]
-    """
-    diff = pose_array2 - pose_array1
-
-    theta_diff = diff[:, 2]
-
-    # Standard radian wrapping using atan2(sin(x), cos(x))
-    wrapped_theta = np.arctan2(np.sin(theta_diff), np.cos(theta_diff))
-
-    # 3. Overwrite the raw angular difference with the wrapped one
-    diff[:, 2] = wrapped_theta
-
-    return diff
 
 def main(data_path, save_path, float_format=None):
+    prefixes = ('s', 'u')
     process(data_path=data_path, output_path=save_path, float_format=float_format)
-    analyse(save_path, float_format=float_format)
+    analyse(save_path, prefixes=prefixes, float_format=float_format)
 
 
 def cli():
@@ -147,7 +154,7 @@ def cli():
 
 
 if __name__ == '__main__':
-    data_path = Path('vc1')
-    save_path = Path('vc1')
-    process(data_path=data_path, output_path=save_path)
-    analyse(save_path)
+    data_path = Path('vc5')
+    save_path = Path('vc5')
+    process(data_path=data_path, output_path=save_path, float_format='%.3f')
+    analyse(save_path, prefixes=('s', 'u'), float_format='%.3f')

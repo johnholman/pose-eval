@@ -27,8 +27,6 @@ class LandmarkPoseEstimator:
         self.geom_estimate_pose = geom_estimate_pose
         # self.send = get_message_service().send
         # self.log = get_logging_service().log
-        # self.optimize_pose = self.make_scaled_least_squares_estimate
-        self.optimize_pose = self.make_both_least_squares_estimates
         self.init()
 
     def init(self):
@@ -55,16 +53,17 @@ class LandmarkPoseEstimator:
         if n_landmarks == 2:
             # if only two landmarks just use the geometric-based pose and set loss to None
             # optimization would leave the pose unchanged with zero loss so not useful here
-            pose = geom_pose
-            loss = None
+            # pose = geom_pose
+            # loss = None
             print(f'{step_num}: two-beacon pose estimate {Pose(*geom_pose)}')
             return None
 
         elif n_landmarks >= 3:
             # estimate using nonlinear least squares optimization with the geometry-derived pose as the starting point
-            result = self.optimize_pose(step_num, geom_pose, landmarks, unscaled_landmarks)
+            result = self.optimize_pose(step_num, geom_pose, landmarks)
 
-        return result
+        # TODO for now, add the algorithm id here
+        return { 'sgs': result }
 
         # relpos = [lm.relpos for lm in landmarks.values()]
         # abspos = [lm.abspos for lm in landmarks.values()]
@@ -74,40 +73,94 @@ class LandmarkPoseEstimator:
         # # print(f'{step_num}: optimization time {duration_ms:.2f} ms')
         # print(
         #     f'{step_num}: three-beacon pose estimate {Pose(*pose)} loss {loss:.4f} iters {iters} opt time {duration_ms:.2f} ms')
+    # def estimate_pose(self, step_num: int, wheel_positions: tuple[float, float]):
+    #
+    #     # get most recent landmark observations made in this stationary period
+    #     if (observations := self.stationary_observations(step_num, wheel_positions)) is None:
+    #         return None
+    #
+    #     unscaled_landmarks, landmarks = observations
+    #     n_landmarks = len(landmarks)
+    #
+    #     # no estimate if a geometric estimate could not be made
+    #     if n_landmarks < 2 or (result := self.geometric_pose_estimate(step_num, landmarks)) is None:
+    #         return None
+    #
+    #     geom_pose, merit = result
+    #     if n_landmarks == 2:
+    #         # if only two landmarks just use the geometric-based pose and set loss to None
+    #         # optimization would leave the pose unchanged with zero loss so not useful here
+    #         # pose = geom_pose
+    #         # loss = None
+    #         print(f'{step_num}: two-beacon pose estimate {Pose(*geom_pose)}')
+    #         return None
+    #
+    #     elif n_landmarks >= 3:
+    #         # estimate using nonlinear least squares optimization with the geometry-derived pose as the starting point
+    #         result = self.optimize_pose(step_num, geom_pose, landmarks)
+    #
+    #     # TODO for now, add the algorithm id here
+    #     return { 'sgs': result }
+    #
+    #     # relpos = [lm.relpos for lm in landmarks.values()]
+    #     # abspos = [lm.abspos for lm in landmarks.values()]
+    #     # start = time.perf_counter()
+    #     # pose, loss, iters = optimize(start_pose=pose, lm_relpos=relpos, lm_abspos=abspos)
+    #     # duration_ms = (time.perf_counter() - start) * 1000
+    #     # # print(f'{step_num}: optimization time {duration_ms:.2f} ms')
+    #     # print(
+    #     #     f'{step_num}: three-beacon pose estimate {Pose(*pose)} loss {loss:.4f} iters {iters} opt time {duration_ms:.2f} ms')
 
-    def make_least_squares_estimate(self, step_num: int, start_pose, landmarks):
+    def optimize_pose(self, start_pose, landmarks):
+        start = time.perf_counter()
         relpos = [lm.relpos for lm in landmarks.values()]
         abspos = [lm.abspos for lm in landmarks.values()]
-        start = time.perf_counter()
         pose, loss, iters = optimize(start_pose=start_pose, lm_relpos=relpos, lm_abspos=abspos)
         duration_ms = (time.perf_counter() - start) * 1000
-        return pose, loss, iters
-
-    def make_scaled_least_squares_estimate(self, step_num: int, start_pose, landmarks, _unscaled_landmarks):
-        pose, loss, iters = self.make_least_squares_estimate(step_num, start_pose, landmarks)
-        return pose, loss
-
-    def make_both_least_squares_estimates(self, step_num: int, start_pose, scaled_landmarks, unscaled_landmarks):
-        results = {}
-        # send_msg = get_message_service().send
-        pose, loss, iters = self.make_least_squares_estimate(step_num=step_num, start_pose=start_pose,
-                                                             landmarks=unscaled_landmarks)
-        print(
-            f'{step_num}: unscaled estimate {Pose(*pose)} loss {loss:.4f} iters {iters}')
-        results['s'] = {'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
-
-        # self.send('test/unscaled', {'pose': pose, 'loss': loss, 'iters': iters})
-        pose, loss, iters = self.make_least_squares_estimate(step_num=step_num, start_pose=start_pose,
-                                                             landmarks=scaled_landmarks)
-        results['u'] = {'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
-
-        print(
-            f'{step_num}: scaled estimate {Pose(*pose)} loss {loss:.4f} iters {iters}')
-
-        print(f'{step_num}:')
-        pprint(results)
-
+        results = {
+            'pose_x': pose[0],
+            'pose_y': pose[1],
+            'pose_theta': pose[2],
+            'loss': loss,
+            'iters': iters,
+            'time': duration_ms,
+        }
+        print(f'optimized result: {results}')
         return results
+
+    # def make_least_squares_estimate(self, step_num: int, start_pose, landmarks):
+    #     relpos = [lm.relpos for lm in landmarks.values()]
+    #     abspos = [lm.abspos for lm in landmarks.values()]
+    #     start = time.perf_counter()
+    #     pose, loss, iters = optimize(start_pose=start_pose, lm_relpos=relpos, lm_abspos=abspos)
+    #     duration_ms = (time.perf_counter() - start) * 1000
+    #     return pose, loss, iters
+    #
+    # def make_scaled_least_squares_estimate(self, step_num: int, start_pose, landmarks, _unscaled_landmarks):
+    #     pose, loss, iters = self.make_least_squares_estimate(step_num, start_pose, landmarks)
+    #     return pose, loss
+    #
+    # def make_both_least_squares_estimates(self, step_num: int, start_pose, scaled_landmarks, unscaled_landmarks):
+    #     results = {}
+    #     # send_msg = get_message_service().send
+    #     pose, loss, iters = self.make_least_squares_estimate(step_num=step_num, start_pose=start_pose,
+    #                                                          landmarks=unscaled_landmarks)
+    #     print(
+    #         f'{step_num}: unscaled estimate {Pose(*pose)} loss {loss:.4f} iters {iters}')
+    #     results['s'] = {'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
+    #
+    #     # self.send('test/unscaled', {'pose': pose, 'loss': loss, 'iters': iters})
+    #     pose, loss, iters = self.make_least_squares_estimate(step_num=step_num, start_pose=start_pose,
+    #                                                          landmarks=scaled_landmarks)
+    #     results['u'] = {'pose_x': pose[0], 'pose_y': pose[1], 'pose_theta': pose[2], 'loss': loss, 'iters': iters}
+    #
+    #     print(
+    #         f'{step_num}: scaled estimate {Pose(*pose)} loss {loss:.4f} iters {iters}')
+    #
+    #     print(f'{step_num}:')
+    #     pprint(results)
+    #
+    #     return results
 
     def stationary_observations(self, step_num: int, wheel_positions: tuple[float, float]) -> \
             tuple[dict[int, BeaconData], dict[int, BeaconData]] | None:
