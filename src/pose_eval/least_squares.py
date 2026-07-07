@@ -101,11 +101,11 @@ if __name__ == "__main__":
 
     marks = [(1, 0), (0., -1), (0, 1)]  # landmark positions
 
-    obs = [(0.0, 1.0), (-pi / 2, 1.0), (pi / 2, 1.0)]  # relative position observations
+    # obs = [(0.0, 1.0), (-pi / 2, 1.0), (pi / 2, 1.0)]  # relative position observations
     obs = [(0.05, 1.01), (-pi / 2 + 0.01, 1.0), (pi / 2 + 0.05, 0.99)]  # relative position observations
     # obs = [(0.1, 1.2), (-pi+0.1 / 2, 0.8), (pi+0.1 / 2, 1.3)]  # relative position observations
 
-    start = (-3, 2, 2)
+    # start = (-3, 2, 2)
     start = (4, 4, pi)
 
     print(f'start: {start} obs {obs}')

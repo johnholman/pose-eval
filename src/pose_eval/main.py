@@ -8,7 +8,6 @@ from pandas import DataFrame
 from pose_eval.analysis import analyse
 from pose_eval.beacon import BeaconObservation, BeaconRegistry
 from pose_eval.pose_estimator import LandmarkPoseEstimator
-from pose_eval.utils.flatten import flatten
 from pose_eval.utils.persist import load_data, save_data, set_base
 
 pd.set_option('display.max_rows', None)
@@ -18,7 +17,7 @@ pd.set_option('display.max_colwidth', None)
 pd.set_option('display.float_format', '{:.2f}'.format)
 
 
-def process(data_path: str | Path, output_path: str | Path, float_format: str | None = None):
+def process(data_path: str | Path, output_path: str | Path, input_types, start_types, float_format: str | None = None):
     """
     """
     base_path = Path(r'~/Google Drive/data/pose-eval').expanduser().resolve()
@@ -40,17 +39,27 @@ def process(data_path: str | Path, output_path: str | Path, float_format: str | 
     # and set index to the step number
     common_df = common_df.set_index('step_num')
 
+    # # get positions of the landmark beacons from the step data
+    # # 1. Get the unique true positions of your 3 beacons from the dataset
+    # # Drop duplicates based on beacon ID to get a clean lookup table
+    # beacon_lookup = df[['b_id', 'b_x', 'b_y']].drop_duplicates(subset=['b_id'])
+    # print(beacon_lookup)
+    # centroid = beacon_lookup[['b_x', 'b_y']].mean(axis=0).to_numpy()
+    #
+    # # This gives you your static starting pose: [mean_x, mean_y, 0.0]
+    # centroid_initial_pose = np.array([centroid[0], centroid[1], 0.0])
+
     dfs = []  # list of result dfs from each algorithm variant
 
-    prefixes = ('s', 'u')
-    scaled_observations = (True, False)
-    for prefix, scaled_observations in zip(prefixes, scaled_observations):
-        cfg = {'scaled_observations': scaled_observations}
-        estimator = EstimatorRunner(prefix, cfg)
-        output_df = estimator.run(df)
-        dfs.append(output_df)
-        # data_fname = 'sposes' if scaled_observations else 'uposes'
-        # save_data(output_df, dirpath=str(save_path), data_fname=data_fname, format_spec=['csv', 'feather'], float_format=float_format)
+    # for prefix, scaled_observations in zip(prefixes, scaled_observations):
+    for input_type in input_types:
+        for start_type in start_types:
+            prefix = start_type + '_' + input_type
+
+            cfg = {'prefix': prefix, 'input_type': input_type, 'start_type': start_type}
+            estimator = EstimatorRunner(cfg)
+            output_df = estimator.run(df)
+            dfs.append(output_df)
 
     for output_df in dfs:
         print(output_df.head())
@@ -65,14 +74,24 @@ def process(data_path: str | Path, output_path: str | Path, float_format: str | 
 
 
 class EstimatorRunner:
-    def __init__(self, prefix: str, cfg: dict):
-        self.prefix = prefix
+    def __init__(self, cfg: dict):
         self.beacon_registry = BeaconRegistry()
         self.pose_estimator = LandmarkPoseEstimator(self.beacon_registry)
-        self.scaled_observations = cfg['scaled_observations']
+        self.prefix = cfg['prefix']
+        self.input_type = cfg['input_type']
+        self.start_type = cfg['start_type']
 
     def run(self, df: DataFrame) -> DataFrame:
-        print('EstimatorRunner.run() starting with standard algorithm')
+        print(f'EstimatorRunner.run() algorithm {self.prefix}')
+
+        # calculate centroid of beacons in case need it later
+        beacon_lookup = df[['b_id', 'b_x', 'b_y']].drop_duplicates(subset=['b_id'])
+        if (n := len(beacon_lookup)) != 3:
+            print(f'{n} landmark beacons found - only 3 supported')
+            exit(1)
+
+        centroid = beacon_lookup[['b_x', 'b_y']].mean(axis=0).to_numpy()
+
         output_rows = []  # output as list of row dictionaries
         for d in df.itertuples():
             step_num = d.step_num
@@ -91,21 +110,38 @@ class EstimatorRunner:
             if len(unscaled_landmarks) < 3:
                 continue
 
-            geom_result = self.pose_estimator.geometric_pose_estimate(step_num, scaled_landmarks)
-            if geom_result is None:
-                continue
+            if self.start_type in ('sg', 'ug'):
+                # if start pose for optimisation uses the geometry estimate, make it as required
+                landmarks = scaled_landmarks if self.start_type == 'sg' else unscaled_landmarks
+                geom_result = self.pose_estimator.geometric_pose_estimate(step_num, landmarks)
+                if geom_result is None:
+                    continue
+                start_pose = geom_result[0]
+            elif self.start_type == 'c':
+                # set start position to centroid of the landmarks and orientation to zero
+                start_pose = np.array([centroid[0], centroid[1], 0.0])
+            else:
+                print(f'invalid start type {self.start_type}')
+                exit(1)
 
-            geom_pose, merit = geom_result
+            if self.input_type == 's':
+                landmarks = scaled_landmarks
+            elif self.input_type == 'u':
+                landmarks = unscaled_landmarks
+            else:
+                print(f'invalid input type {self.input_type}')
+                exit(1)
 
-            landmarks = scaled_landmarks if self.scaled_observations else unscaled_landmarks
+            result = self.pose_estimator.optimize_pose(start_pose, landmarks)
 
-            result = self.pose_estimator.optimize_pose(geom_pose, landmarks)
-
-            # save any resulting pose estimate provided it is based only on valid observations
+            # only save pose estimates based on valid observations
             if not d.valid_obs:
                 print(f'{step_num}: *** invalid observation')
+                continue
 
-            if result is None or not d.valid_obs:
+            # discard any estimates with high optimization loss of number of iterations
+            if result is None or result['loss'] > 0.25 or result['iters'] > 5:
+            # if result is None or not d.valid_obs:
                 print(f'{step_num}: three-landmark pose not made')
                 continue
 
@@ -128,9 +164,15 @@ class EstimatorRunner:
 
 
 def main(data_path, save_path, float_format=None):
-    prefixes = ('s', 'u')
-    process(data_path=data_path, output_path=save_path, float_format=float_format)
-    analyse(save_path, prefixes=prefixes, float_format=float_format)
+    input_types = ('s', 'u')
+    start_types = ('c', 'sg', 'ug')
+    process(data_path=data_path, output_path=save_path, input_types=input_types, start_types=start_types,
+            float_format='%.3f')
+    analyse(save_path, input_types=input_types, start_types=start_types, float_format='%.3f')
+
+    # prefixes = ('s', 'u')
+    # process(data_path=data_path, output_path=save_path, float_format=float_format)
+    # analyse(save_path, prefixes=prefixes, float_format=float_format)
 
 
 def cli():
@@ -154,7 +196,10 @@ def cli():
 
 
 if __name__ == '__main__':
-    data_path = Path('vc5')
-    save_path = Path('vc5')
-    process(data_path=data_path, output_path=save_path, float_format='%.3f')
-    analyse(save_path, prefixes=('s', 'u'), float_format='%.3f')
+    data_path = Path('c2')
+    save_path = Path('c2filter')
+    input_types = ('s', 'u')
+    start_types = ('c', 'sg', 'ug')
+    process(data_path=data_path, output_path=save_path, input_types=input_types, start_types=start_types,
+            float_format='%.3f')
+    analyse(save_path, input_types=input_types, start_types=start_types, float_format='%.3f')

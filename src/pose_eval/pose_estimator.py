@@ -2,7 +2,6 @@ import time
 from dataclasses import dataclass
 from itertools import combinations
 from math import pi
-from pprint import pprint
 
 from pose_eval.beacon import BeaconData, BeaconRegistry
 from pose_eval.least_squares import optimize
@@ -60,7 +59,7 @@ class LandmarkPoseEstimator:
 
         elif n_landmarks >= 3:
             # estimate using nonlinear least squares optimization with the geometry-derived pose as the starting point
-            result = self.optimize_pose(step_num, geom_pose, landmarks)
+            result = self.optimize_pose(geom_pose, landmarks)
 
         # TODO for now, add the algorithm id here
         return { 'sgs': result }
@@ -118,9 +117,9 @@ class LandmarkPoseEstimator:
         pose, loss, iters = optimize(start_pose=start_pose, lm_relpos=relpos, lm_abspos=abspos)
         duration_ms = (time.perf_counter() - start) * 1000
         results = {
-            'pose_x': pose[0],
-            'pose_y': pose[1],
-            'pose_theta': pose[2],
+            'x': pose[0],
+            'y': pose[1],
+            'theta': pose[2],
             'loss': loss,
             'iters': iters,
             'time': duration_ms,
